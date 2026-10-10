@@ -23,11 +23,26 @@ scanner/          этап 1 — чтение источников, нормал
   project_files.py CLAUDE.md, .mcp.json
   git.py          ветка, коммиты, незакоммиченные изменения
   paths.py        claude_home() (env CLAUDE_STUDIO_CLAUDE_HOME), нормализация путей, worktree
-storage/ api/ launcher/ mcp_server/ frontend/   — следующие этапы
+storage/          этап 2 — SQLite (%APPDATA%\ClaudeStudio\data.db, env CLAUDE_STUDIO_DATA_DIR)
+  models.py       таблицы; время — ISO-строки UTC с «Z» (utc_iso), не datetime
+  db.py           open_engine(), миграции через PRAGMA user_version (список MIGRATIONS, только дописывать)
+  sync.py         sync(): скан → upsert сессий/папок/агентов → rebind(); кэш по mtime_ns+size
+api/              этап 2 — FastAPI; create_app(engine, token)
+  app.py          маршруты; токен X-Studio-Token проверяется на уровне всего приложения
+  views.py        сборка ответов (Index — агрегаты без N+1)
+  schemas.py      входные pydantic-модели
+launcher/ mcp_server/ frontend/   — следующие этапы
 tools/make_fixture.py   обезличивание сессии для тестов
 ```
 
 Каждый источник в `core.scan` обёрнут в `_guard`: исключение → строка в `warnings`, остальные источники работают.
+
+Инварианты хранилища (на каждый есть тест):
+- скан не трогает ручные поля: Project целиком, Session.user_title/note, ручную привязку (project_manual);
+- сессия, чей файл исчез, остаётся с file_missing=True; урезанная запись из history.jsonl не затирает полную;
+- автопривязка: cwd_main сессии внутри пути проекта, побеждает самый длинный путь;
+- каждый маршрут API без токена → 401 (test_every_route_requires_token обходит все маршруты);
+- поиск фильтрует в Python: LIKE в SQLite не различает регистр кириллицы.
 
 ## Команды
 

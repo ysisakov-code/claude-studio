@@ -25,6 +25,8 @@ class SessionInfo:
     source: str = "jsonl"  # jsonl | history
     file_missing: bool = False
     bad_lines: int = 0
+    file_mtime_ns: int | None = None
+    file_size: int | None = None
 
     @property
     def is_empty(self) -> bool:

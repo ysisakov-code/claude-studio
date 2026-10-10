@@ -10,10 +10,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
+from typing import Iterable
 
 from . import agents, git, history, project_files, sessions
 from .models import ProjectCandidate, ScanResult
-from .paths import claude_home, path_key
+from .paths import claude_home, normalize_path, path_key
 
 log = logging.getLogger(__name__)
 
@@ -60,16 +61,27 @@ def group_by_folder(found: list, warnings: list[str]) -> list[ProjectCandidate]:
     return list(by_path.values())
 
 
-def scan(home: Path | None = None, with_git: bool = True) -> ScanResult:
+def scan(
+    home: Path | None = None,
+    with_git: bool = True,
+    cache: sessions.SessionCache | None = None,
+    extra_paths: Iterable[str] = (),
+) -> ScanResult:
+    """extra_paths — папки проектов, которые надо обогатить, даже если в них не было сессий."""
     t0 = time.perf_counter()
     home = home or claude_home()
     warnings: list[str] = []
 
-    found = _guard(warnings, "сессии", sessions.scan_sessions, home, warnings, default=[])
+    found = _guard(warnings, "сессии", sessions.scan_sessions, home, warnings, cache, default=[])
     found += _guard(warnings, "history.jsonl", history.scan_history,
                     home, {s.id for s in found}, warnings, default=[])
 
     projects = group_by_folder(found, warnings)
+    known = {path_key(p.path) for p in projects}
+    for extra in extra_paths:
+        if path_key(extra) not in known:
+            known.add(path_key(extra))
+            projects.append(ProjectCandidate(path=normalize_path(extra), exists=False))
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(partial(_enrich, home=home, warnings=warnings, with_git=with_git), projects))
     projects.sort(key=lambda p: p.last_activity.timestamp() if p.last_activity else 0, reverse=True)

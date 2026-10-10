@@ -11,7 +11,7 @@
 | --- | --- |
 | 0. Разведка | готово |
 | 1. Сканер | готово |
-| 2. Хранилище и API | — |
+| 2. Хранилище и API | готово |
 | 3. Интерфейс | — |
 | 4. Запуск Claude | — |
 | 5. MCP студии | — |
@@ -26,7 +26,10 @@ python -m venv .venv
 .venv\Scripts\python -m scanner            # проекты и сессии на этом ПК
 .venv\Scripts\python -m scanner --json     # то же в JSON
 .venv\Scripts\python -m pytest             # тесты
+.venv\Scripts\python -m api --dev --port 8765   # API без токена, документация: http://127.0.0.1:8765/docs
 ```
+
+База: `%APPDATA%\ClaudeStudio\data.db` (другая папка — переменная `CLAUDE_STUDIO_DATA_DIR`).
 
 Сканер только читает `%USERPROFILE%\.claude` и ничего туда не пишет.
 Чтобы просканировать другую папку (например, копию), задайте `CLAUDE_STUDIO_CLAUDE_HOME`.

@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from .models import SessionInfo
 from .paths import normalize_path
@@ -176,7 +177,11 @@ def parse_session_file(path: Path) -> SessionInfo:
     return info
 
 
-def scan_sessions(home: Path, warnings: list[str]) -> list[SessionInfo]:
+SessionCache = Callable[[str, int, int], "SessionInfo | None"]
+
+
+def scan_sessions(home: Path, warnings: list[str], cache: SessionCache | None = None) -> list[SessionInfo]:
+    """cache(id, mtime_ns, size) возвращает ранее разобранную сессию, если файл не менялся."""
     projects_dir = home / "projects"
     if not projects_dir.is_dir():
         warnings.append(f"Нет папки {projects_dir}")
@@ -185,10 +190,16 @@ def scan_sessions(home: Path, warnings: list[str]) -> list[SessionInfo]:
     # Только верхний уровень: в подпапках <sessionId>/subagents лежат транскрипты субагентов.
     for path in sorted(projects_dir.glob("*/*.jsonl")):
         try:
+            st = path.stat()
+            cached = cache(path.stem, st.st_mtime_ns, st.st_size) if cache else None
+            if cached is not None:
+                result.append(cached)
+                continue
             info = parse_session_file(path)
         except OSError as e:
             warnings.append(f"Не прочитан {path}: {e}")
             continue
+        info.file_mtime_ns, info.file_size = st.st_mtime_ns, st.st_size
         if info.bad_lines:
             warnings.append(f"{path.name}: пропущено битых строк: {info.bad_lines}")
         result.append(info)

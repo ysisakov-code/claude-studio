@@ -1,2 +1,8 @@
 pyyaml>=6.0
+fastapi>=0.143
+uvicorn[standard]>=0.54
+sqlmodel>=0.0.48
+
+# разработка
 pytest>=8.0
+httpx2>=2.13
