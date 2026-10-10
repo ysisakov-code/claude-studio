@@ -12,7 +12,7 @@
 | 0. Разведка | готово |
 | 1. Сканер | готово |
 | 2. Хранилище и API | готово |
-| 3. Интерфейс | — |
+| 3. Интерфейс | готово |
 | 4. Запуск Claude | — |
 | 5. MCP студии | — |
 | 6. Оценка проекта | — |
@@ -30,6 +30,17 @@ python -m venv .venv
 ```
 
 База: `%APPDATA%\ClaudeStudio\data.db` (другая папка — переменная `CLAUDE_STUDIO_DATA_DIR`).
+
+### Интерфейс
+
+```powershell
+cd frontend; npm install; npm run build; cd ..
+.venv\Scripts\python -m desktop            # окно «Студии» (pywebview)
+```
+
+Для правки интерфейса с горячей перезагрузкой: в одном терминале `.venv\Scripts\python -m api --dev --port 8765`,
+в другом `cd frontend; npm run dev` (запросы `/api` проксируются на 8765).
+Собранный интерфейс без окна: `.venv\Scripts\python -m api --dev --ui --port 8765`, затем http://127.0.0.1:8765/.
 
 Сканер только читает `%USERPROFILE%\.claude` и ничего туда не пишет.
 Чтобы просканировать другую папку (например, копию), задайте `CLAUDE_STUDIO_CLAUDE_HOME`.

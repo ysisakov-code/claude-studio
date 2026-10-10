@@ -172,3 +172,39 @@ def test_list_stale_and_archived(env):
     client.patch(f"/api/projects/{pid}", json={"stage": "archived"})
     assert client.get("/api/projects").json() == []
     assert len(client.get("/api/projects", params={"include_archived": True}).json()) == 1
+
+
+def test_open_only_known_paths(env, monkeypatch, tmp_path):
+    client, proj, _ = env
+    opened = []
+    monkeypatch.setattr("api.app.open_path", opened.append)
+    client.post("/api/projects", json={"name": "Ж", "paths": [str(proj)]})
+    assert client.post("/api/open", json={"path": str(proj)}).status_code == 204
+    assert client.post("/api/open", json={"path": str(proj / "CLAUDE.md")}).status_code == 204
+    assert client.post("/api/open", json={"path": r"C:\Windows\System32\cmd.exe"}).status_code == 403
+    assert client.post("/api/open", json={"path": str(tmp_path)}).status_code == 403
+    assert opened == [str(proj), str(proj / "CLAUDE.md")]
+
+
+def test_all_sessions_with_project_names(env):
+    client, proj, _ = env
+    client.post("/api/projects", json={"name": "Журнал", "paths": [str(proj)]})
+    rows = client.get("/api/sessions").json()
+    assert [(r["id"], r["project_name"]) for r in rows] == [("s2", None), ("s1", "Журнал")]
+
+
+def test_projects_without_activity_sorted_last(env):
+    client, proj, _ = env
+    client.post("/api/projects", json={"name": "Пустой"})
+    client.post("/api/projects", json={"name": "Журнал", "paths": [str(proj)]})
+    assert [p["name"] for p in client.get("/api/projects").json()] == ["Журнал", "Пустой"]
+
+
+def test_static_ui_served_without_token(tmp_path, claude_home):
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>Студия</html>", encoding="utf-8")
+    app = create_app(open_engine(tmp_path / "d.db"), TOKEN, scan_on_start=False, claude_home=claude_home, static_dir=dist)
+    bare = TestClient(app)
+    assert "Студия" in bare.get("/").text
+    assert bare.get("/api/projects").status_code == 401

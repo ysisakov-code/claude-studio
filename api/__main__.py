@@ -10,6 +10,7 @@ import logging
 import secrets
 import socket
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--dev", action="store_true", help="без токена")
     ap.add_argument("--no-scan", action="store_true", help="не сканировать при запуске")
+    ap.add_argument("--ui", action="store_true", help="раздавать собранный интерфейс из frontend/dist")
     args = ap.parse_args(argv)
 
     sys.stdout.reconfigure(encoding="utf-8")
@@ -36,10 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     port = args.port or free_port()
     token = None if args.dev else secrets.token_urlsafe(24)
     engine = open_engine()
-    app = create_app(engine, token, scan_on_start=not args.no_scan)
+    dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+    app = create_app(engine, token, scan_on_start=not args.no_scan, static_dir=dist if args.ui else None)
 
     print(f"База: {default_db_path()}")
     print(f"API:  http://127.0.0.1:{port}/docs")
+    if args.ui:
+        print(f"Интерфейс: http://127.0.0.1:{port}/" + (f"#t={token}" if token else ""))
     if token:
         print(f"Токен ({TOKEN_HEADER}): {token}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

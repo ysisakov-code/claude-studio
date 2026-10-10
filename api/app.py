@@ -13,16 +13,18 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine, delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session as DB
 from sqlmodel import select
 
+from launcher import open_path
 from scanner.paths import normalize_path, path_key
 from storage import rebind, sync
 from storage.models import (
-    ActivityLog, AgentPin, Idea, IdeaStatus, IgnoredFolder, Project, ProjectPath, Recommendation,
-    ScanRun, Session, StageHistory, now_iso,
+    ActivityLog, Agent, AgentPin, Folder, Idea, IdeaStatus, IgnoredFolder, Project, ProjectPath,
+    Recommendation, ScanRun, Session, StageHistory, now_iso,
 )
 
 from . import schemas as S
@@ -33,7 +35,7 @@ TOKEN_HEADER = "X-Studio-Token"
 
 
 def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
-               claude_home: Path | None = None) -> FastAPI:
+               claude_home: Path | None = None, static_dir: Path | None = None) -> FastAPI:
     def require_token(request: Request) -> None:
         if token is None:
             return
@@ -108,7 +110,8 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         if not include_archived:
             q = q.where(Project.stage != "archived")
         cards = [project_card(p, ix) for p in db.exec(q)]
-        cards.sort(key=lambda c: c["last_activity"] or c["updated_at"], reverse=True)
+        # Сначала то, с чем работали недавно; проекты без сессий и коммитов — в конце, новые из них выше.
+        cards.sort(key=lambda c: (c["last_activity"] is not None, c["last_activity"] or c["created_at"]), reverse=True)
         return cards
 
     @app.post("/api/projects", status_code=201)
@@ -184,6 +187,12 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         rows = db.exec(select(Session).where(Session.project_id == pid)
                        .order_by(Session.ended_at.desc())).all()
         return [session_view(s) for s in rows]
+
+    @app.get("/api/sessions")
+    def all_sessions(limit: int = Query(300, ge=1, le=5000), db: DB = Depends(get_db)):
+        names = {p.id: p.name for p in db.exec(select(Project))}
+        rows = db.exec(select(Session).order_by(Session.ended_at.desc()).limit(limit)).all()
+        return [{**session_view(s), "project_name": names.get(s.project_id)} for s in rows]
 
     @app.get("/api/sessions/{sid}")
     def get_session(sid: str, db: DB = Depends(get_db)):
@@ -389,7 +398,6 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
     @app.get("/api/agents")
     def list_agents(db: DB = Depends(get_db)):
         """Глобальные агенты и скиллы — кандидаты на закрепление за проектом."""
-        from storage.models import Agent
         return db.exec(select(Agent).where(Agent.scope == "global").order_by(Agent.kind, Agent.name)).all()
 
     @app.post("/api/projects/{pid}/pins", status_code=201)
@@ -408,6 +416,27 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         db.exec(delete(AgentPin).where(AgentPin.project_id == pid, AgentPin.file_path == file_path))
         db.commit()
         return detail(db, p)
+
+    # ---------- открыть папку / файл ----------
+
+    def known_paths(db: DB) -> set[str]:
+        """Открывать можно только то, что студия сама показывает: папки проектов и сессий,
+        CLAUDE.md, файлы агентов и скиллов. Произвольный путь из запроса не откроется."""
+        keys = {p.path_key for p in db.exec(select(ProjectPath))}
+        keys |= {path_key(p) for p in db.exec(select(Folder.claude_md_path)) if p}
+        keys |= {path_key(p) for p in db.exec(select(Agent.file_path)) if p}
+        keys |= {path_key(p) for p in db.exec(select(Session.cwd_start)) if p}
+        keys |= {k for k in db.exec(select(Session.cwd_main_key)) if k}
+        return keys
+
+    @app.post("/api/open", status_code=204)
+    def open_known(data: S.FolderIn, db: DB = Depends(get_db)):
+        if path_key(data.path) not in known_paths(db):
+            raise HTTPException(403, "Этот путь студии неизвестен")
+        try:
+            open_path(normalize_path(data.path))
+        except FileNotFoundError:
+            raise HTTPException(404, "Папка или файл не найдены на диске") from None
 
     # ---------- скан и поиск ----------
 
@@ -433,5 +462,10 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         sessions = [session_view(s) for s in db.exec(select(Session).order_by(Session.ended_at.desc()))
                     if hit(s.title, s.user_title, s.first_prompt, s.last_prompt, s.note)]
         return {"projects": projects, "sessions": sessions[:50]}
+
+    # Собранный фронтенд. Монтируется последним, чтобы не перекрыть /api.
+    # Статика без токена: в ней нет данных, токен приходит в адресе после «#» и на сервер не уходит.
+    if static_dir and static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="ui")
 
     return app

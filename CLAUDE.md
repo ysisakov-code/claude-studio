@@ -31,7 +31,14 @@ api/              этап 2 — FastAPI; create_app(engine, token)
   app.py          маршруты; токен X-Studio-Token проверяется на уровне всего приложения
   views.py        сборка ответов (Index — агрегаты без N+1)
   schemas.py      входные pydantic-модели
-launcher/ mcp_server/ frontend/   — следующие этапы
+launcher/         open_path(); этап 4 — запуск Claude в терминале
+desktop/          python -m desktop: uvicorn в потоке + окно pywebview; токен в адресе после «#t=»
+frontend/         этап 3 — React + TS + Vite, dnd-kit, lucide-react, шрифты @fontsource (офлайн)
+  src/App.tsx     каркас: левая панель, маршруты в состоянии, Ctrl+K, тема
+  src/pages/      Projects (сетка/доска), ProjectPage (вкладки), Other (идеи, «Разобрать», сессии)
+  src/ui.tsx      Ruler, EditableText (сохранение по blur), Dialog, уведомления, useLoad/useAction
+  src/styles.css  вся визуальная система: токены на :root, тёмная тема — [data-theme='dark']
+mcp_server/       этап 5
 tools/make_fixture.py   обезличивание сессии для тестов
 ```
 
@@ -42,7 +49,12 @@ tools/make_fixture.py   обезличивание сессии для тест�
 - сессия, чей файл исчез, остаётся с file_missing=True; урезанная запись из history.jsonl не затирает полную;
 - автопривязка: cwd_main сессии внутри пути проекта, побеждает самый длинный путь;
 - каждый маршрут API без токена → 401 (test_every_route_requires_token обходит все маршруты);
-- поиск фильтрует в Python: LIKE в SQLite не различает регистр кириллицы.
+- поиск фильтрует в Python: LIKE в SQLite не различает регистр кириллицы;
+- /api/open открывает только пути, известные базе (папки проектов и сессий, CLAUDE.md, файлы агентов).
+
+Интерфейс: «картотека» — стадия как цветная закладка над карточкой, прогресс как линейка,
+красная ручка (--pen) только для доработок и просрочки. Названия — Unbounded, текст — Onest.
+После правки фронтенда: `cd frontend && npm run build` (desktop раздаёт frontend/dist).
 
 ## Команды
 
