@@ -24,6 +24,9 @@ class ProjectIn(BaseModel):
     next_step: str = ""
     thoughts: str = ""
     paths: list[str] = []
+    parent_id: int | None = None
+    color: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    icon: str | None = Field(None, max_length=40)
 
 
 class ProjectPatch(BaseModel):
@@ -37,6 +40,22 @@ class ProjectPatch(BaseModel):
     claude_ai_links: list[Link] | None = None
     next_step: str | None = None
     thoughts: str | None = None
+    # null допустим: «сделать самостоятельным проектом», «вернуть цвет/значок по смыслу»
+    parent_id: int | None = None
+    color: str | None = Field(None, pattern=r"^#[0-9a-fA-F]{6}$")
+    icon: str | None = Field(None, max_length=40)
+
+
+NULLABLE_PATCH = {"parent_id", "color", "icon"}
+
+
+class CoverIn(BaseModel):
+    path: str
+
+
+class CoverUpload(BaseModel):
+    filename: str = Field(max_length=200)
+    data: str = Field(max_length=20_000_000)  # base64, ~15 МБ картинки
 
 
 class PathIn(BaseModel):

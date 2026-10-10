@@ -17,6 +17,7 @@ from sqlmodel import Session as DB
 from sqlmodel import select
 
 from scanner import scan
+from scanner.covers import best_cover
 from scanner.models import ProjectCandidate, SessionInfo
 from scanner.paths import path_key
 
@@ -81,6 +82,22 @@ def _upsert_folder(db: DB, cand: ProjectCandidate) -> None:
     db.add(f)
 
 
+def _refresh_covers(db: DB, warnings: list[str]) -> None:
+    """Обложка по умолчанию для папок проектов. Ищется один раз и заново, только если файл пропал."""
+    for pp in db.exec(select(ProjectPath)).all():
+        f = db.get(Folder, pp.path_key)
+        if not f or not f.exists:
+            continue
+        if f.cover_candidate and Path(f.cover_candidate).is_file():
+            continue
+        try:
+            f.cover_candidate = best_cover(Path(f.path))
+        except OSError as e:
+            warnings.append(f"обложка {f.path}: {e}")
+            continue
+        db.add(f)
+
+
 def rebind(db: DB) -> int:
     """Автопривязка сессий к проектам по путям. Ручная привязка не трогается.
     Побеждает самый длинный (вложенный) путь проекта."""
@@ -141,6 +158,7 @@ def sync(engine: Engine, home: Path | None = None, with_git: bool = True) -> Sca
                          model=a.model, file_path=a.file_path))
 
         db.flush()
+        _refresh_covers(db, result.warnings)
         rebind(db)
         run = ScanRun(duration_s=round(result.duration_s, 3), sessions_total=len(rows),
                       sessions_parsed=parsed, warnings=result.warnings)

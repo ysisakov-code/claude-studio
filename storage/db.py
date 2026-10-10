@@ -27,7 +27,26 @@ def _m1_initial(conn) -> None:
     SQLModel.metadata.create_all(conn)
 
 
-MIGRATIONS = [_m1_initial]
+def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
+    """ALTER TABLE ADD COLUMN для недостающих колонок. На новой базе create_all уже создал их."""
+    have = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))}
+    for name, ddl in columns.items():
+        if name not in have:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+def _m2_covers_and_parents(conn) -> None:
+    _add_columns(conn, "project", {
+        "parent_id": "INTEGER REFERENCES project(id)",
+        "cover_path": "VARCHAR",
+        "color": "VARCHAR",
+        "icon": "VARCHAR",
+    })
+    _add_columns(conn, "folder", {"cover_candidate": "VARCHAR"})
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_project_parent_id ON project (parent_id)"))
+
+
+MIGRATIONS = [_m1_initial, _m2_covers_and_parents]
 
 
 def migrate(engine: Engine) -> int:

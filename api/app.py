@@ -6,13 +6,16 @@
 """
 from __future__ import annotations
 
+import base64
 import hmac
 import logging
+import secrets
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine, delete, update
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +23,8 @@ from sqlmodel import Session as DB
 from sqlmodel import select
 
 from launcher import open_path
-from scanner.paths import normalize_path, path_key
+from scanner.covers import IMAGE_EXT, find_cover_candidates
+from scanner.paths import is_within, normalize_path, path_key
 from storage import rebind, sync
 from storage.models import (
     ActivityLog, Agent, AgentPin, Folder, Idea, IdeaStatus, IgnoredFolder, Project, ProjectPath,
@@ -40,6 +44,9 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         if token is None:
             return
         got = request.headers.get(TOKEN_HEADER, "")
+        # <img src> не умеет слать заголовки, поэтому картинкам (только GET) токен можно передать в ?t=
+        if not got and request.method == "GET":
+            got = request.query_params.get("t", "")
         if not hmac.compare_digest(got, token):
             raise HTTPException(401, "Нет доступа")
 
@@ -56,7 +63,24 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         try:
             run_scan()
         except Exception:  # noqa: BLE001
-            log.exception("Скан при запуске не удался")
+            log.exception("Скан не удался")
+
+    def scan_soon() -> None:
+        """После изменения папок проекта: подтянуть CLAUDE.md, git и обложку, не задерживая ответ."""
+        if scan_on_start:  # в тестах фоновые сканы выключены вместе со сканом при запуске
+            threading.Thread(target=_safe_scan, daemon=True, name="rescan").start()
+
+    def check_parent(db: DB, pid: int | None, parent_id: int | None) -> None:
+        """Вложенность одного уровня: часть не может иметь своих частей."""
+        if parent_id is None:
+            return
+        parent = get_project(db, parent_id)
+        if pid is not None and parent_id == pid:
+            raise HTTPException(422, "Проект не может быть частью самого себя")
+        if parent.parent_id is not None:
+            raise HTTPException(422, f"«{parent.name}» сам является частью проекта, вложить в него нельзя")
+        if pid is not None and db.exec(select(Project).where(Project.parent_id == pid)).first():
+            raise HTTPException(422, "У проекта есть свои части, сделать его частью другого нельзя")
 
     app = FastAPI(title="Студия", dependencies=[Depends(require_token)], lifespan=lifespan)
     app.state.engine = engine
@@ -87,6 +111,7 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         return pp
 
     def create_project(db: DB, data: S.ProjectIn) -> Project:
+        check_parent(db, None, data.parent_id)
         p = Project(**data.model_dump(exclude={"paths", "claude_ai_links"}),
                     claude_ai_links=[l.model_dump() for l in data.claude_ai_links])
         db.add(p)
@@ -118,6 +143,8 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
     def post_project(data: S.ProjectIn, db: DB = Depends(get_db)):
         p = create_project(db, data)
         db.commit()
+        if data.paths:
+            scan_soon()
         return detail(db, p)
 
     @app.get("/api/projects/{pid}")
@@ -133,8 +160,10 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
                                 comment=data.stage_comment))
         if "claude_ai_links" in changes and data.claude_ai_links is not None:
             changes["claude_ai_links"] = [l.model_dump() for l in data.claude_ai_links]
+        if "parent_id" in changes:
+            check_parent(db, p.id, changes["parent_id"])
         for k, v in changes.items():
-            if v is not None:
+            if v is not None or k in S.NULLABLE_PATCH:
                 setattr(p, k, v)
         p.updated_at = now_iso()
         db.add(p)
@@ -148,6 +177,8 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
             db.exec(delete(model).where(model.project_id == pid))
         db.exec(update(Session).where(Session.project_id == pid).values(project_id=None, project_manual=False))
         db.exec(update(Idea).where(Idea.related_project_id == pid).values(related_project_id=None))
+        db.exec(update(Project).where(Project.parent_id == pid).values(parent_id=None))
+        _drop_uploaded_cover(p.cover_path)
         db.delete(p)
         db.flush()
         rebind(db)
@@ -160,6 +191,7 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         db.flush()
         rebind(db)
         db.commit()
+        scan_soon()
         return detail(db, p)
 
     @app.delete("/api/projects/{pid}/paths/{path_id}")
@@ -236,6 +268,7 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         name = data.name or Path(path).name or path
         p = create_project(db, S.ProjectIn(name=name, paths=[path]))
         db.commit()
+        scan_soon()
         return detail(db, p)
 
     @app.post("/api/inbox/attach")
@@ -245,6 +278,7 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
         db.flush()
         rebind(db)
         db.commit()
+        scan_soon()
         return detail(db, p)
 
     @app.get("/api/inbox/ignored")
@@ -414,6 +448,91 @@ def create_app(engine: Engine, token: str | None, scan_on_start: bool = True,
     def unpin_agent(pid: int, file_path: str = Query(...), db: DB = Depends(get_db)):
         p = get_project(db, pid)
         db.exec(delete(AgentPin).where(AgentPin.project_id == pid, AgentPin.file_path == file_path))
+        db.commit()
+        return detail(db, p)
+
+    # ---------- обложки ----------
+
+    # рядом с базой, с которой запущен сервер (в тестах — временная папка)
+    covers_dir = Path(engine.url.database).parent / "covers"
+
+    def _drop_uploaded_cover(path: str | None) -> None:
+        """Удаляет только свои загруженные копии в covers/, файлы в папках проектов не трогает."""
+        if path and is_within(path, str(covers_dir)):
+            Path(path).unlink(missing_ok=True)
+
+    def image_allowed(db: DB, raw: str) -> bool:
+        """Картинку можно показать, если она лежит в папке какого-либо проекта или в covers/."""
+        if Path(raw).suffix.lower() not in IMAGE_EXT:
+            return False
+        roots = [p.path for p in db.exec(select(ProjectPath))] + [str(covers_dir)]
+        return any(is_within(raw, r) for r in roots)
+
+    @app.get("/api/projects/{pid}/cover")
+    def get_cover(pid: int, db: DB = Depends(get_db)):
+        get_project(db, pid)
+        path = Index(db).cover_file(pid)
+        if not path or not Path(path).is_file():
+            raise HTTPException(404, "Обложки нет")
+        return FileResponse(path, headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/api/projects/{pid}/cover-candidates")
+    def cover_candidates(pid: int, db: DB = Depends(get_db)):
+        get_project(db, pid)
+        result, seen = [], set()
+        for pp in db.exec(select(ProjectPath).where(ProjectPath.project_id == pid)):
+            if not Path(pp.path).is_dir():
+                continue
+            for c in find_cover_candidates(Path(pp.path)):
+                if c.path not in seen:
+                    seen.add(c.path)
+                    result.append({"path": c.path, "name": c.name, "size": c.size})
+        return result
+
+    @app.get("/api/image")
+    def get_image(path: str = Query(...), db: DB = Depends(get_db)):
+        if not image_allowed(db, path) or not Path(path).is_file():
+            raise HTTPException(404, "Картинка не найдена")
+        return FileResponse(path, headers={"Cache-Control": "max-age=3600"})
+
+    @app.put("/api/projects/{pid}/cover")
+    def set_cover(pid: int, data: S.CoverIn, db: DB = Depends(get_db)):
+        p = get_project(db, pid)
+        if not image_allowed(db, data.path) or not Path(data.path).is_file():
+            raise HTTPException(422, "Обложкой может быть картинка из папки проекта")
+        if p.cover_path != data.path:
+            _drop_uploaded_cover(p.cover_path)
+        p.cover_path, p.updated_at = data.path, now_iso()
+        db.add(p)
+        db.commit()
+        return detail(db, p)
+
+    @app.post("/api/projects/{pid}/cover/upload")
+    def upload_cover(pid: int, data: S.CoverUpload, db: DB = Depends(get_db)):
+        p = get_project(db, pid)
+        ext = Path(data.filename).suffix.lower()
+        if ext not in IMAGE_EXT:
+            raise HTTPException(422, "Подойдёт картинка PNG, JPG, WEBP или GIF")
+        try:
+            raw = base64.b64decode(data.data, validate=True)
+        except ValueError:
+            raise HTTPException(422, "Файл повреждён") from None
+        covers_dir.mkdir(parents=True, exist_ok=True)
+        target = covers_dir / f"{pid}-{secrets.token_hex(4)}{ext}"
+        target.write_bytes(raw)
+        _drop_uploaded_cover(p.cover_path)
+        p.cover_path, p.updated_at = str(target), now_iso()
+        db.add(p)
+        db.commit()
+        return detail(db, p)
+
+    @app.delete("/api/projects/{pid}/cover")
+    def reset_cover(pid: int, db: DB = Depends(get_db)):
+        """Вернуть обложку по умолчанию (картинка из папки или оформление по смыслу)."""
+        p = get_project(db, pid)
+        _drop_uploaded_cover(p.cover_path)
+        p.cover_path, p.updated_at = None, now_iso()
+        db.add(p)
         db.commit()
         return detail(db, p)
 

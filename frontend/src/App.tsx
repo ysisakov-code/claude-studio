@@ -1,4 +1,4 @@
-import { FolderKanban, Inbox, Lightbulb, MessagesSquare, Moon, RefreshCw, Search, Sun, SunMoon } from 'lucide-react'
+import { FolderKanban, Inbox, Lightbulb, MessagesSquare, Moon, RefreshCw, Search, Sun, SunMoon, type LucideIcon } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import { IdeasPage, InboxPage, SessionsPage } from './pages/Other'
@@ -9,9 +9,17 @@ import type { InboxGroup, ScanRun } from './types'
 import { useAction } from './ui'
 import { relDate } from './util'
 
-type Route = { page: 'projects' | 'ideas' | 'inbox' | 'sessions' } | { page: 'project'; id: number }
+type PageId = 'projects' | 'ideas' | 'inbox' | 'sessions'
+type Route = { page: PageId } | { page: 'project'; id: number }
 type Theme = 'system' | 'light' | 'dark'
 const THEME_KEY = 'studio.theme'
+
+const NAV: { id: PageId; label: string; icon: LucideIcon; color: string }[] = [
+  { id: 'projects', label: 'Проекты', icon: FolderKanban, color: 'var(--blue)' },
+  { id: 'ideas', label: 'Идеи', icon: Lightbulb, color: 'var(--orange)' },
+  { id: 'sessions', label: 'Сессии', icon: MessagesSquare, color: 'var(--purple)' },
+  { id: 'inbox', label: 'Разобрать', icon: Inbox, color: 'var(--red)' },
+]
 
 function readTheme(): Theme {
   try { return (localStorage.getItem(THEME_KEY) as Theme) || 'system' } catch { return 'system' }
@@ -64,48 +72,56 @@ export default function App() {
     setScanning(true)
     const r = await act(() => api.post<ScanRun>('/api/scan'))
     setScanning(false)
-    if (r) {
-      setLastScan(r)
-      changed()
-      if (r.warnings.length) console.warn('Предупреждения скана', r.warnings)
-    }
+    if (r) { setLastScan(r); changed() }
   }
 
-  const openProject = (id: number) => setRoute({ page: 'project', id })
-  const nav = (page: 'projects' | 'ideas' | 'inbox' | 'sessions') => setRoute({ page })
-  const current = route.page === 'project' ? 'projects' : route.page
+  const openProject = (id: number) => { setRoute({ page: 'project', id }); document.querySelector('.main')?.scrollTo(0, 0) }
+  const nav = (page: PageId) => setRoute({ page })
+  const current: PageId = route.page === 'project' ? 'projects' : route.page
   const nextTheme: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' }
-  const themeLabel: Record<Theme, string> = { system: 'Тема как в Windows', light: 'Светлая тема', dark: 'Тёмная тема' }
+  const themeLabel: Record<Theme, string> = { system: 'Как в системе', light: 'Светлая тема', dark: 'Тёмная тема' }
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : SunMoon
 
   return (
     <div className="app">
-      <nav className="rail" aria-label="Разделы">
-        <div className="brand">Студия<small>проекты с Claude</small></div>
-        <button className="nav-item" aria-current={current === 'projects' ? 'page' : undefined} onClick={() => nav('projects')}><FolderKanban size={17} />Проекты</button>
-        <button className="nav-item" aria-current={current === 'ideas' ? 'page' : undefined} onClick={() => nav('ideas')}><Lightbulb size={17} />Идеи</button>
-        <button className="nav-item" aria-current={current === 'sessions' ? 'page' : undefined} onClick={() => nav('sessions')}><MessagesSquare size={17} />Сессии</button>
-        <button className="nav-item" aria-current={current === 'inbox' ? 'page' : undefined} onClick={() => nav('inbox')}>
-          <Inbox size={17} />Разобрать{inboxCount > 0 && <span className="count alert">{inboxCount}</span>}
-        </button>
-        <button className="nav-item" onClick={() => setSearching(true)}><Search size={17} />Поиск<span className="count"><kbd>Ctrl</kbd> <kbd>K</kbd></span></button>
-
-        <div className="rail-foot">
-          <button className="nav-item" onClick={rescan} disabled={scanning}>
-            <RefreshCw size={17} className={scanning ? 'spinner' : ''} />{scanning ? 'Обновляю…' : 'Обновить'}
+      <nav className="side" aria-label="Разделы">
+        <div className="side-title">Студия</div>
+        <button className="searchbar" onClick={() => setSearching(true)}><Search size={16} />Поиск<kbd>Ctrl K</kbd></button>
+        {NAV.map(n => (
+          <button key={n.id} className="nav-row" aria-current={current === n.id ? 'page' : undefined} onClick={() => nav(n.id)}>
+            <span className="icon-tile" style={{ background: n.color }}><n.icon size={16} strokeWidth={2.2} /></span>{n.label}
+            {n.id === 'inbox' && inboxCount > 0 && <span className="badge">{inboxCount}</span>}
           </button>
-          <button className="nav-item" onClick={() => setTheme(nextTheme[theme])} title="Сменить тему"><ThemeIcon size={17} />{themeLabel[theme]}</button>
-          <div className="rail-note">{lastScan ? `Сессии прочитаны ${relDate(lastScan.started_at)}` : 'Читаю сессии Claude Code…'}</div>
+        ))}
+        <div className="side-foot">
+          <button className="nav-row" onClick={rescan} disabled={scanning}>
+            <span className="icon-tile" style={{ background: 'var(--gray)' }}><RefreshCw size={15} className={scanning ? 'spinner' : ''} /></span>
+            {scanning ? 'Обновляю…' : 'Обновить'}
+          </button>
+          <button className="nav-row" onClick={() => setTheme(nextTheme[theme])} title="Сменить тему">
+            <span className="icon-tile" style={{ background: 'var(--indigo)' }}><ThemeIcon size={15} /></span>{themeLabel[theme]}
+          </button>
+          <div className="side-note">{lastScan ? `Сессии прочитаны ${relDate(lastScan.started_at)}` : 'Читаю сессии Claude Code…'}</div>
         </div>
       </nav>
 
       <main className="main">
         {route.page === 'projects' && <ProjectsPage open={openProject} version={version} />}
-        {route.page === 'project' && <ProjectPage key={route.id} id={route.id} back={() => nav('projects')} onChanged={changed} />}
+        {route.page === 'project' && <ProjectPage key={route.id} id={route.id} back={() => nav('projects')} open={openProject} onChanged={changed} />}
         {route.page === 'ideas' && <IdeasPage open={openProject} onChanged={changed} />}
         {route.page === 'inbox' && <InboxPage open={openProject} onChanged={changed} />}
         {route.page === 'sessions' && <SessionsPage version={version} />}
       </main>
+
+      <nav className="tabbar" aria-label="Разделы">
+        {NAV.map(n => (
+          <button key={n.id} aria-current={current === n.id ? 'page' : undefined} onClick={() => nav(n.id)}>
+            <n.icon size={23} strokeWidth={current === n.id ? 2.4 : 1.8} />{n.label}
+            {n.id === 'inbox' && inboxCount > 0 && <span className="badge">{inboxCount}</span>}
+          </button>
+        ))}
+        <button onClick={() => setSearching(true)}><Search size={23} strokeWidth={1.8} />Поиск</button>
+      </nav>
 
       {searching && <SearchPalette onClose={() => setSearching(false)} openProject={openProject} openSessions={() => nav('sessions')} />}
     </div>

@@ -79,6 +79,11 @@ class Project(SQLModel, table=True):
     thoughts: str = ""
     created_at: str = Field(default_factory=now_iso)
     updated_at: str = Field(default_factory=now_iso)
+    # миграция 2: вложенные проекты (один уровень) и оформление
+    parent_id: int | None = Field(default=None, foreign_key="project.id", index=True)
+    cover_path: str | None = None  # выбранная обложка: файл в папке проекта или в %APPDATA%\ClaudeStudio\covers
+    color: str | None = None       # цвет темы (#RRGGBB); пусто — подбирается по смыслу на клиенте
+    icon: str | None = None        # ключ значка; пусто — подбирается по смыслу
 
 
 class ProjectPath(SQLModel, table=True):
@@ -131,6 +136,7 @@ class Folder(SQLModel, table=True):
     git_toplevel: str | None = None
     git_commits: list[dict] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     scanned_at: str = Field(default_factory=now_iso)
+    cover_candidate: str | None = None  # миграция 2: лучшая картинка из папки для обложки
 
 
 class Agent(SQLModel, table=True):

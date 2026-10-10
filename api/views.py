@@ -1,8 +1,10 @@
 """Сборка ответов API: карточки проектов, детали, сессии, «Разобрать»."""
 from __future__ import annotations
 
+import zlib
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import func
 from sqlmodel import Session as DB
@@ -79,6 +81,27 @@ class Index:
         self.pins: dict[int, list[str]] = defaultdict(list)
         for pin in db.exec(select(AgentPin)):
             self.pins[pin.project_id].append(pin.file_path)
+        self.children: dict[int, list[int]] = defaultdict(list)
+        self.projects: dict[int, Project] = {}
+        for p in db.exec(select(Project).order_by(Project.id)):
+            self.projects[p.id] = p
+            if p.parent_id:
+                self.children[p.parent_id].append(p.id)
+
+    def cover_file(self, pid: int) -> str | None:
+        """Выбранная обложка, иначе лучшая картинка из папок проекта."""
+        p = self.projects.get(pid)
+        if p and p.cover_path and Path(p.cover_path).is_file():
+            return p.cover_path
+        for pp in self.paths.get(pid, []):
+            f = self.folders.get(pp.path_key)
+            if f and f.cover_candidate:
+                return f.cover_candidate
+        return None
+
+    def own_stats(self, pid: int) -> tuple[str | None, int, int]:
+        last_session, count = self.sessions.get(pid, (None, 0))
+        return _latest(last_session, self.last_commit(pid)), count, self.open_recs.get(pid, 0)
 
     def primary_path(self, pid: int) -> ProjectPath | None:
         paths = self.paths.get(pid, [])
@@ -100,11 +123,16 @@ class Index:
 
 
 def project_card(p: Project, ix: Index) -> dict:
-    last_session, count = ix.sessions.get(p.id, (None, 0))
-    last = _latest(last_session, ix.last_commit(p.id))
+    """Карточка. У проекта с частями активность, сессии и доработки считаются вместе с частями."""
+    last, count, recs = ix.own_stats(p.id)
+    children = ix.children.get(p.id, [])
+    for cid in children:
+        c_last, c_count, c_recs = ix.own_stats(cid)
+        last, count, recs = _latest(last, c_last), count + c_count, recs + c_recs
     agents = ix.agents(p.id)
     primary = ix.primary_path(p.id)
     stale = days_since(last)
+    cover = ix.cover_file(p.id)
     return {
         "id": p.id,
         "name": p.name,
@@ -119,7 +147,15 @@ def project_card(p: Project, ix: Index) -> dict:
         "days_inactive": stale,
         "is_stale": stale is not None and stale > STALE_DAYS,
         "session_count": count,
-        "open_recommendations": ix.open_recs.get(p.id, 0),
+        "open_recommendations": recs,
+        "parent_id": p.parent_id,
+        "parent_name": ix.projects[p.parent_id].name if p.parent_id in ix.projects else None,
+        "children": children,
+        "color": p.color,
+        "icon": p.icon,
+        # версия в адресе картинки сбрасывает кэш браузера при смене обложки
+        "cover": f"{zlib.crc32(cover.encode()):08x}" if cover else None,
+        "cover_is_custom": bool(p.cover_path),
         "agent_counts": {k: sum(a.kind == k for a in agents) for k in ("agent", "skill", "mcp")},
         "pinned_count": len(ix.pins.get(p.id, [])),
         "created_at": p.created_at,
@@ -155,6 +191,7 @@ def project_detail(p: Project, ix: Index) -> dict:
         "paths": paths,
         "agents": [_agent_view(a) for a in ix.agents(p.id)],
         "pinned_agents": pinned,
+        "parts": [project_card(ix.projects[cid], ix) for cid in ix.children.get(p.id, [])],
     })
     return d
 

@@ -208,3 +208,74 @@ def test_static_ui_served_without_token(tmp_path, claude_home):
     bare = TestClient(app)
     assert "Студия" in bare.get("/").text
     assert bare.get("/api/projects").status_code == 401
+
+
+def test_parts_aggregate_into_parent(env):
+    client, proj, other = env
+    parent = client.post("/api/projects", json={"name": "История зашла"}).json()
+    a = client.post("/api/projects", json={"name": "Завод", "paths": [str(proj)], "parent_id": parent["id"]}).json()
+    client.post(f"/api/projects/{a['id']}/recommendations", json={"text": "бот"})
+    d = client.get(f"/api/projects/{parent['id']}").json()
+    assert d["children"] == [a["id"]] and d["session_count"] == 1 and d["open_recommendations"] == 1
+    assert d["last_activity"] == "2026-10-01T10:00:00Z"
+    assert [x["name"] for x in d["parts"]] == ["Завод"]
+    assert client.get(f"/api/projects/{a['id']}").json()["parent_name"] == "История зашла"
+    # один уровень вложенности
+    deep = client.post("/api/projects", json={"name": "Глубже", "parent_id": a["id"]})
+    assert deep.status_code == 422
+    assert client.patch(f"/api/projects/{parent['id']}", json={"parent_id": a["id"]}).status_code == 422
+    assert client.patch(f"/api/projects/{a['id']}", json={"parent_id": a["id"]}).status_code == 422
+    # отделить часть и удалить родителя: часть остаётся самостоятельным проектом
+    client.patch(f"/api/projects/{a['id']}", json={"parent_id": None, "color": "#34C759"}).raise_for_status()
+    got = client.get(f"/api/projects/{a['id']}").json()
+    assert got["parent_id"] is None and got["color"] == "#34C759"
+    client.patch(f"/api/projects/{a['id']}", json={"parent_id": parent["id"]})
+    client.delete(f"/api/projects/{parent['id']}")
+    assert client.get(f"/api/projects/{a['id']}").json()["parent_id"] is None
+
+
+def test_color_validated(env):
+    client, *_ = env
+    assert client.post("/api/projects", json={"name": "x", "color": "red"}).status_code == 422
+
+
+PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 20_000)
+
+
+def test_covers(env, tmp_path):
+    client, proj, _ = env
+    (proj / "docs").mkdir()
+    (proj / "docs" / "screenshot.png").write_bytes(PNG)
+    (proj / "node_modules").mkdir()
+    (proj / "node_modules" / "cover.png").write_bytes(PNG)
+    (proj / "tiny.png").write_bytes(b"x" * 100)
+    pid = client.post("/api/projects", json={"name": "Ж", "paths": [str(proj)]}).json()["id"]
+    cands = client.get(f"/api/projects/{pid}/cover-candidates").json()
+    assert [c["name"] for c in cands] == ["screenshot.png"]
+    # обложка по умолчанию появляется после скана
+    client.post("/api/scan")
+    card = client.get(f"/api/projects/{pid}").json()
+    assert card["cover"] and not card["cover_is_custom"]
+    assert client.get(f"/api/projects/{pid}/cover").content == PNG
+    # картинку по токену в адресе отдаём только GET и только из папок проектов
+    bare = TestClient(client.app)
+    assert bare.get(f"/api/projects/{pid}/cover", params={"t": TOKEN}).status_code == 200
+    assert bare.get(f"/api/projects/{pid}/cover").status_code == 401
+    assert client.get("/api/image", params={"path": cands[0]["path"]}).status_code == 200
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(PNG)
+    assert client.get("/api/image", params={"path": str(outside)}).status_code == 404
+    assert client.put(f"/api/projects/{pid}/cover", json={"path": str(outside)}).status_code == 422
+    # своя картинка: загрузка, замена, сброс — загруженные копии удаляются
+    import base64
+    up = client.post(f"/api/projects/{pid}/cover/upload",
+                     json={"filename": "моя.jpg", "data": base64.b64encode(b"\xff\xd8" + b"1" * 30_000).decode()}).json()
+    assert up["cover_is_custom"]
+    covers = list((tmp_path / "covers").iterdir())
+    assert len(covers) == 1
+    client.put(f"/api/projects/{pid}/cover", json={"path": cands[0]["path"]}).raise_for_status()
+    assert list((tmp_path / "covers").iterdir()) == []
+    assert client.delete(f"/api/projects/{pid}/cover").json()["cover_is_custom"] is False
+    assert (proj / "docs" / "screenshot.png").exists()  # файлы проекта не удаляются
+    bad = client.post(f"/api/projects/{pid}/cover/upload", json={"filename": "x.exe", "data": "AAAA"})
+    assert bad.status_code == 422

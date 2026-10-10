@@ -129,3 +129,20 @@ def test_paths():
     assert path_key("c:/proj") == path_key("C:\\PROJ")
     assert is_within("C:\\Proj\\sub", "c:\\proj")
     assert not is_within("C:\\Project2", "C:\\Proj")
+
+
+def test_cover_candidates_rank_and_skip(tmp_path):
+    from scanner.covers import best_cover, find_cover_candidates
+    big = b"\x89PNG" + b"\x00" * 300_000
+    (tmp_path / "Saved").mkdir()
+    (tmp_path / "Saved" / "AutoScreenshot.png").write_bytes(big)
+    (tmp_path / "media").mkdir()
+    (tmp_path / "media" / "5897d61a9e254329b004554be1c79ff5.jpg").write_bytes(big * 3)  # загрузка пользователя
+    (tmp_path / "icon-512.png").write_bytes(b"x" * 60_000)
+    (tmp_path / "node_modules" / "pkg").mkdir(parents=True)
+    (tmp_path / "node_modules" / "pkg" / "cover.png").write_bytes(big)
+    names = [c.name for c in find_cover_candidates(tmp_path)]
+    assert names[0] == "AutoScreenshot.png" and "cover.png" not in names
+    assert best_cover(tmp_path).endswith("AutoScreenshot.png")
+    (tmp_path / "Saved" / "AutoScreenshot.png").unlink()
+    assert best_cover(tmp_path) is None  # остались только значок и чужая загрузка

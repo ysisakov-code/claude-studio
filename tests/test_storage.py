@@ -8,6 +8,7 @@ from sqlmodel import Session as DB
 from sqlmodel import select
 
 from storage import open_engine, rebind, sync
+from storage.db import MIGRATIONS
 from storage.models import Project, ProjectPath, Session, StageHistory
 
 
@@ -25,7 +26,34 @@ def test_migrations_idempotent(tmp_path):
     open_engine(p)
     e = open_engine(p)
     with e.connect() as c:
-        assert c.exec_driver_sql("PRAGMA user_version").scalar() == 1
+        assert c.exec_driver_sql("PRAGMA user_version").scalar() == len(MIGRATIONS)
+
+
+def test_migration_2_upgrades_v1_database(tmp_path):
+    """База первой версии (как у пользователя) получает новые колонки, данные сохраняются."""
+    import sqlite3
+    p = tmp_path / "old.db"
+    c = sqlite3.connect(p)
+    # схема project и folder из миграции 1 (коммит 63e7657)
+    c.executescript("""
+        CREATE TABLE project (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL, description VARCHAR NOT NULL,
+            stage VARCHAR NOT NULL, progress INTEGER NOT NULL, priority VARCHAR NOT NULL, tags JSON NOT NULL,
+            claude_ai_links JSON NOT NULL, next_step VARCHAR NOT NULL, thoughts VARCHAR NOT NULL,
+            created_at VARCHAR NOT NULL, updated_at VARCHAR NOT NULL);
+        CREATE TABLE folder (path_key VARCHAR PRIMARY KEY, path VARCHAR NOT NULL, "exists" BOOLEAN NOT NULL,
+            claude_md_path VARCHAR, claude_md_summary VARCHAR, claude_md_modified_at VARCHAR, git_branch VARCHAR,
+            git_dirty BOOLEAN NOT NULL, git_toplevel VARCHAR, git_commits JSON NOT NULL, scanned_at VARCHAR NOT NULL);
+        INSERT INTO project VALUES (1, 'Старый', '', 'idea', 10, 'normal', '[]', '[]', 'шаг', '',
+            '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');
+        PRAGMA user_version = 1;
+    """)
+    c.close()
+    e = open_engine(p)
+    with DB(e) as db:
+        old = db.exec(select(Project)).one()
+        assert (old.name, old.progress, old.next_step, old.parent_id, old.color) == ("Старый", 10, "шаг", None, None)
+    with e.connect() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar() == len(MIGRATIONS)
 
 
 def test_manual_data_survives_rescan(engine, claude_home, tmp_path):

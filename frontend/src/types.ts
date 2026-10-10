@@ -23,6 +23,13 @@ export interface ProjectCard {
   pinned_count: number
   created_at: string
   updated_at: string
+  parent_id: number | null
+  parent_name: string | null
+  children: number[]
+  color: string | null
+  icon: string | null
+  cover: string | null
+  cover_is_custom: boolean
 }
 
 export interface Agent {
@@ -55,6 +62,7 @@ export interface ProjectDetail extends ProjectCard {
   paths: ProjectPathInfo[]
   agents: Agent[]
   pinned_agents: Agent[]
+  parts: ProjectCard[]
 }
 
 export interface SessionItem {

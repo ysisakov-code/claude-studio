@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { MessagesSquare, Search as SearchIcon } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api } from './api'
+import { Cover } from './Cover'
 import type { ProjectCard, SessionItem } from './types'
 import { STAGE_LABEL, relDate } from './util'
 
 type Result = { projects: ProjectCard[]; sessions: SessionItem[] }
-type Hit = { key: string; title: string; sub: string; go: () => void }
+type Hit = { key: string; title: string; sub: string; lead: ReactNode; go: () => void }
 
 export function SearchPalette({ onClose, openProject, openSessions }: {
   onClose: () => void; openProject: (id: number) => void; openSessions: () => void
@@ -24,9 +26,13 @@ export function SearchPalette({ onClose, openProject, openSessions }: {
   }, [q])
 
   const hits: Hit[] = [
-    ...(res?.projects ?? []).map(p => ({ key: `p${p.id}`, title: p.name, sub: STAGE_LABEL[p.stage], go: () => openProject(p.id) })),
+    ...(res?.projects ?? []).map(p => ({
+      key: `p${p.id}`, title: p.name, sub: p.parent_name ?? STAGE_LABEL[p.stage],
+      lead: <Cover p={p} showIcon={false} />, go: () => openProject(p.id),
+    })),
     ...(res?.sessions ?? []).slice(0, 12).map(s => ({
       key: `s${s.id}`, title: s.display_title, sub: relDate(s.ended_at),
+      lead: <span className="icon-tile" style={{ background: 'var(--purple)', width: 32, height: 32 }}><MessagesSquare size={16} /></span>,
       go: () => (s.project_id ? openProject(s.project_id) : openSessions()),
     })),
   ]
@@ -42,17 +48,21 @@ export function SearchPalette({ onClose, openProject, openSessions }: {
   return (
     <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
       <div className="palette" role="dialog" aria-modal="true" aria-label="Поиск">
-        <input ref={input} className="input" placeholder="Проект, тег или что спрашивали у Claude" value={q}
-          onChange={e => setQ(e.target.value)} onKeyDown={onKey} aria-label="Поиск" />
+        <div className="search-input">
+          <SearchIcon size={19} />
+          <input ref={input} placeholder="Проект, тег или что спрашивали у Claude" value={q}
+            onChange={e => setQ(e.target.value)} onKeyDown={onKey} aria-label="Поиск" />
+          <button className="btn plain" onClick={onClose}>Отмена</button>
+        </div>
         <div className="results" role="listbox">
           {!q.trim() && <div className="empty">Ищет по названиям проектов, тегам, заметкам и запросам в сессиях.</div>}
           {res && hits.length === 0 && <div className="empty">Ничего не нашлось по «{q}».</div>}
           {hits.map((h, i) => (
             <div key={h.key}>
-              {i === 0 && nProjects > 0 && <div className="group">Проекты</div>}
-              {i === nProjects && <div className="group">Сессии</div>}
+              {i === 0 && nProjects > 0 && <div className="group-label">Проекты</div>}
+              {i === nProjects && <div className="group-label">Сессии</div>}
               <button className="hit" role="option" aria-selected={i === sel} onMouseEnter={() => setSel(i)} onClick={() => choose(h)}>
-                <span>{h.title}</span><span className="s">{h.sub}</span>
+                {h.lead}<span>{h.title}</span><span className="s">{h.sub}</span>
               </button>
             </div>
           ))}
