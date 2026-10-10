@@ -64,7 +64,8 @@ export function ProjectPage({ id, back, onChanged }: { id: number; back: () => v
         ))}
       </div>
 
-      {tab === 'overview' && <Overview p={p} save={save} openPath={openPath} setData={setData} onChanged={onChanged} />}
+      {tab === 'overview' && <Overview p={p} save={save} openPath={openPath} setData={setData} onChanged={onChanged}
+        onDeleted={() => { onChanged(); back() }} />}
       {tab === 'sessions' && <Sessions projectId={id} onChanged={onChanged} />}
       {tab === 'agents' && <Agents p={p} setData={setData} openPath={openPath} />}
       {tab === 'recs' && <Recs projectId={id} onChanged={() => { onChanged(); api.get<ProjectDetail>(`/api/projects/${id}`).then(setData) }} />}
@@ -74,13 +75,14 @@ export function ProjectPage({ id, back, onChanged }: { id: number; back: () => v
 }
 
 /* ---------- обзор ---------- */
-function Overview({ p, save, openPath, setData, onChanged }: {
+function Overview({ p, save, openPath, setData, onChanged, onDeleted }: {
   p: ProjectDetail; save: (patch: Record<string, unknown>, ok?: string) => Promise<void>
-  openPath: (path: string) => void; setData: (d: ProjectDetail) => void; onChanged: () => void
+  openPath: (path: string) => void; setData: (d: ProjectDetail) => void; onChanged: () => void; onDeleted: () => void
 }) {
   const act = useAction()
   const [newPath, setNewPath] = useState('')
   const [linkOpen, setLinkOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [tag, setTag] = useState('')
   const primary = p.paths.find(x => x.is_primary) ?? p.paths[0]
 
@@ -172,6 +174,12 @@ function Overview({ p, save, openPath, setData, onChanged }: {
               </div>))}</div>}
         </div>
 
+        <div className="sheet">
+          <h4>Удаление</h4>
+          <p className="muted small-text" style={{ marginTop: 0 }}>Проект исчезнет из Студии вместе с доработками и журналом. Папка на диске и сессии Claude Code не пострадают.</p>
+          <button className="btn danger" onClick={() => setDeleting(true)}><Trash2 size={15} />Удалить проект</button>
+        </div>
+
         {primary?.claude_md && (
           <div className="sheet">
             <h4>Из CLAUDE.md</h4>
@@ -180,7 +188,26 @@ function Overview({ p, save, openPath, setData, onChanged }: {
         )}
       </div>
       {linkOpen && <LinkDialog onClose={() => setLinkOpen(false)} onAdd={l => { setLinkOpen(false); save({ claude_ai_links: [...p.claude_ai_links, l] }) }} />}
+      {deleting && <DeleteDialog p={p} onClose={() => setDeleting(false)} onDeleted={onDeleted} />}
     </div>
+  )
+}
+
+function DeleteDialog({ p, onClose, onDeleted }: { p: ProjectDetail; onClose: () => void; onDeleted: () => void }) {
+  const act = useAction()
+  const remove = async () => {
+    const ok = await act(() => api.del(`/api/projects/${p.id}`).then(() => true), `Проект «${p.name}» удалён`)
+    if (ok) onDeleted()
+  }
+  return (
+    <Dialog title={`Удалить «${p.name}»?`} onClose={onClose}>
+      <p style={{ margin: 0 }}>Из Студии удалятся описание, мысли, {p.open_recommendations ? `${p.open_recommendations} откр. доработок, ` : ''}журнал и история стадий. Вернуть их не получится.</p>
+      <p className="muted" style={{ margin: 0 }}>Папки на диске, код и сессии Claude Code останутся. Сессии проекта вернутся в раздел «Разобрать».</p>
+      <div className="actions">
+        <button className="btn ghost" onClick={onClose}>Отмена</button>
+        <button className="btn primary" style={{ background: 'var(--pen)', borderColor: 'var(--pen)', color: '#fff' }} onClick={remove}><Trash2 size={15} />Удалить проект</button>
+      </div>
+    </Dialog>
   )
 }
 
