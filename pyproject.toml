@@ -1,0 +1,8 @@
+[project]
+name = "claude-studio"
+version = "0.1.0"
+description = "Студия: локальный менеджер проектов, сделанных с Claude Code"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
